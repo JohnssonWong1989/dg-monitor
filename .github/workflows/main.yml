@@ -9,19 +9,19 @@ jobs:
   monitor:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Install dependencies
-      run: |
-        pip install selenium requests
-        sudo apt-get update
-        sudo apt-get install -y chromium-browser chromium-chromedriver
+      - name: Install dependencies
+        run: |
+          pip install selenium requests webdriver-manager
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
 
-    - name: Run monitor
-      run: python dg_monitor.py
+      - name: Run monitor
+        run: python dg_monitor.py
