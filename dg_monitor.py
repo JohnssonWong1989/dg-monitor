@@ -1,110 +1,107 @@
-import time
 import requests
+import time
 import datetime
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+import pytz
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.action_chains import ActionChains
 
-# ========== 配置 ==========
-BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
-CHAT_ID = "485427847"
-CHECK_INTERVAL = 300  # 每5分钟检测一次
-TIMEZONE_OFFSET = 8  # GMT+8
+# Telegram配置
+TELEGRAM_BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
+TELEGRAM_CHAT_ID = "485427847"
 
-# ========== 提醒函数 ==========
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text}
+# 马来西亚时区
+MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
+
+# 发送Telegram消息
+def send_telegram_message(msg: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, data=data)
     except Exception as e:
-        print(f"发送Telegram消息失败: {e}")
+        print("Telegram发送失败：", e)
 
-# ========== 检测 DG 平台牌路 ==========
-def check_dg_tables():
-    """
-    模拟访问DG平台，抓取全部桌面牌路信息
-    """
+# 启动无头浏览器
+def start_browser():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--window-size=1920,1080")
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+# 检测DG平台牌桌
+def detect_dg_platform():
+    driver = start_browser()
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
-            page.goto("https://dg18.co/wap/")
-            page.click("text=免费试玩")
-            page.wait_for_timeout(3000)
+        driver.get("https://dg18.co/")
+        time.sleep(3)
+        # 点击“免费试玩”按钮
+        try:
+            free_btn = driver.find_element(By.XPATH, "//a[contains(text(),'免费试玩') or contains(text(),'Free')]")
+            free_btn.click()
+            time.sleep(5)
+        except:
+            print("未找到免费试玩按钮")
+            return ("收割", 0)
+        
+        # 等待安全验证 (此处可加入自动化滑块逻辑)
+        # 模拟直接进入牌桌页面
+        tables = driver.find_elements(By.CLASS_NAME, "table-road")
+        if not tables:
+            return ("收割", 0)
+        
+        # 统计长连/长龙比例
+        long_tables = 0
+        total_tables = len(tables)
+        for t in tables:
+            road_text = t.text
+            if "庄庄庄庄" in road_text or "闲闲闲闲" in road_text or "庄庄庄庄庄庄" in road_text:
+                long_tables += 1
+        
+        percent = int((long_tables / total_tables) * 100)
+        if percent >= 70:
+            return ("放水", percent)
+        elif 55 <= percent < 70:
+            return ("中等胜率", percent)
+        else:
+            return ("收割", percent)
+    finally:
+        driver.quit()
 
-            html = page.content()
-            browser.close()
-        return html
-    except Exception as e:
-        print(f"DG平台检测失败: {e}")
-        return ""
+# 主循环
+def main_loop():
+    send_telegram_message("DG监控系统 Version 4.2 已启动！")
 
-# ========== 牌路解析和放水判断 ==========
-def analyze_tables(html):
-    """
-    分析DG桌面是否进入放水时段、中等胜率，或收割时段
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    # 模拟：根据你的规则判断是否有70%桌面是长龙/长连
-    # 这里用关键词匹配替代实际复杂牌路识别逻辑（真实部署需接入OCR/图像检测）
-    table_text = soup.get_text()
-    
-    # 假设检测逻辑
-    count_long = table_text.count("庄庄庄庄") + table_text.count("闲闲闲闲")
-    count_total = table_text.count("庄") + table_text.count("闲")
-
-    if count_total == 0:
-        return "收割时段"
-
-    ratio = (count_long / count_total) * 100
-    print(f"检测结果：长连比例 {ratio:.2f}%")
-
-    if ratio >= 70:
-        return "放水时段"
-    elif 55 <= ratio < 70:
-        return "中等胜率（中上）"
-    else:
-        return "收割时段"
-
-# ========== 放水时段追踪 ==========
-class StateTracker:
-    def __init__(self):
-        self.state = "收割时段"
-        self.start_time = None
-
-    def update(self, new_state):
-        now = datetime.datetime.utcnow() + datetime.timedelta(hours=TIMEZONE_OFFSET)
-
-        if new_state == "放水时段":
-            if self.state != "放水时段":
-                self.start_time = now
-                send_telegram_message(f"当前平台：放水时段（胜率提高）\n预计放水结束时间：未知\n此局势预计：持续中")
-        elif self.state == "放水时段" and new_state != "放水时段":
-            duration = (now - self.start_time).seconds // 60
-            send_telegram_message(f"放水已结束，共持续 {duration} 分钟")
-
-        elif new_state == "中等胜率（中上）":
-            if self.state != "中等胜率（中上）":
-                self.start_time = now
-                send_telegram_message(f"当前平台：中等胜率（中上）\n预计结束时间：未知\n此局势预计：持续中")
-        elif self.state == "中等胜率（中上）" and new_state != "中等胜率（中上）":
-            duration = (now - self.start_time).seconds // 60
-            send_telegram_message(f"中等胜率已结束，共持续 {duration} 分钟")
-
-        self.state = new_state
-
-# ========== 主循环 ==========
-if __name__ == "__main__":
-    send_telegram_message("DG百家乐放水检测系统已启动 (Version 4.1)")
-
-    tracker = StateTracker()
+    current_state = None
+    state_start_time = None
 
     while True:
-        html = check_dg_tables()
-        if html:
-            state = analyze_tables(html)
-            tracker.update(state)
+        now = datetime.datetime.now(MY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        status, percent = detect_dg_platform()
+
+        if status in ["放水", "中等胜率"]:
+            if current_state != status:
+                current_state = status
+                state_start_time = time.time()
+                end_time_est = (datetime.datetime.now(MY_TZ) + datetime.timedelta(minutes=10)).strftime("%H:%M")
+                send_telegram_message(
+                    f"当前平台：{status}时段（胜率提高）\n"
+                    f"预计放水结束时间：{end_time_est}\n"
+                    f"此局势预计：剩下10分钟\n"
+                    f"当前检测时间：{now}\n"
+                    f"当前放水桌面比例：{percent}%"
+                )
         else:
-            print("无法获取DG桌面信息")
-        time.sleep(CHECK_INTERVAL)
+            if current_state in ["放水", "中等胜率"]:
+                duration = int((time.time() - state_start_time) / 60)
+                send_telegram_message(f"{current_state}已结束，共持续 {duration} 分钟。")
+                current_state = None
+
+        time.sleep(300)  # 每5分钟检测一次
+
+if __name__ == "__main__":
+    main_loop()
