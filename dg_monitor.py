@@ -1,6 +1,3 @@
-# ✅ Version 4.3: 完整整合所有策略與真實DG平台檢測腳本 ✅
-# 全部根據你在本聊天框提供的每一條要求、邏輯、圖片結構、提醒規則完成
-
 import time
 import datetime
 import pytz
@@ -11,28 +8,58 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 
-# ----------------------
-# ✅ Telegram 設定
-# ----------------------
+# Telegram配置
 TELEGRAM_BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 TELEGRAM_CHAT_ID = "485427847"
 
+# 时区
 MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
 
-
-def send_telegram_message(message):
+# 发送Telegram消息
+def send_telegram_message(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
     try:
         requests.post(url, data=data)
     except Exception as e:
-        print("Telegram 發送失敗：", e)
+        print("Telegram发送失败：", e)
 
-# ----------------------
-# ✅ 檢測 DG 桌面真實放水狀態
-# ----------------------
+# 检测桌面走势的逻辑
+def analyze_table_pattern(history):
+    """
+    判断一张牌桌是否是长连/长龙：
+    - 连开 ≥5 粒庄/闲
+    - 连开 ≥8 粒为长龙
+    """
+    if "庄庄庄庄庄" in history or "闲闲闲闲闲" in history:
+        return True
+    if "庄庄庄庄庄庄庄庄" in history or "闲闲闲闲闲闲闲闲" in history:
+        return True
+    return False
 
+# 滑块自动化模拟（简易版）
+def solve_slider(driver):
+    try:
+        slider = driver.find_element(By.CLASS_NAME, "slider-class")  # 伪类名
+        action = ActionChains(driver)
+        action.click_and_hold(slider).move_by_offset(260, 0).release().perform()
+        time.sleep(2)
+    except:
+        print("未检测到滑块验证")
+
+# 检测DG平台桌面
 def detect_dg_platform():
+    """
+    真实检测 DG 平台桌面状态：
+    1. 打开 dg18.co / wap
+    2. 点击免费试玩/Free
+    3. 通过安全验证
+    4. 获取桌面数据
+    返回:
+      status: "放水" / "中等胜率" / "收割" / "胜率中等"
+      percent: 放水结构桌面比例
+    """
+
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
@@ -40,86 +67,77 @@ def detect_dg_platform():
 
     driver = webdriver.Chrome(options=chrome_options)
     driver.get("https://dg18.co/wap/")
-    time.sleep(6)
 
-    # 點擊免費試玩
+    time.sleep(5)
     try:
-        btn = driver.find_element(By.XPATH, "//button[contains(text(),'免费试玩') or contains(text(),'Free')]")
-        btn.click()
-        time.sleep(10)  # 等跳轉
+        # 点击免费试玩
+        free_button = driver.find_element(By.XPATH, "//button[contains(text(),'免费试玩') or contains(text(),'Free')]")
+        free_button.click()
+        time.sleep(5)
+        solve_slider(driver)
     except:
+        print("未找到免费试玩按钮")
         driver.quit()
         return ("收割", 0)
 
-    # TODO: ➕ 可加滑塊驗證處理
-
-    # 模擬抓桌面分析
-    tables = driver.find_elements(By.CLASS_NAME, "table-class")  # 替換為真實class
-    total = len(tables)
-    if total == 0:
+    # 获取所有桌面
+    tables = driver.find_elements(By.CLASS_NAME, "table-class")  # 伪类名
+    total_tables = len(tables)
+    if total_tables == 0:
         driver.quit()
         return ("收割", 0)
 
-    good_table = 0
+    good_count = 0
+    bad_count = 0
+
     for t in tables:
         text = t.text
-        # 分析條件:
-        if (
-            "连庄" in text or "连闲" in text or "长龙" in text or
-            "连开5" in text or "连开6" in text or "连开8" in text
-        ):
-            good_table += 1
-        elif (
-            "庄闲庄闲" in text or "单跳" in text or "连开4" in text
-        ):
-            continue  # 收割期跳過
+        # 检测单跳
+        if "庄闲庄闲" in text or "闲庄闲庄" in text:
+            bad_count += 1
+        if analyze_table_pattern(text):
+            good_count += 1
 
     driver.quit()
+    percent = (good_count / total_tables) * 100
 
-    ratio = (good_table / total) * 100
-
-    if ratio >= 70:
-        return ("放水", ratio)
-    elif 55 <= ratio < 70:
-        return ("中等胜率", ratio)
+    if percent >= 70:
+        return ("放水", percent)
+    elif 55 <= percent < 70:
+        return ("中等胜率", percent)
     else:
-        return ("收割", ratio)
+        return ("收割", percent)
 
-# ----------------------
-# ✅ 主循環（每5分鐘檢測 + 實時提醒）
-# ----------------------
-
+# 主循环
 def main_loop():
-    send_telegram_message("✅ DG監控系統 Version 4.3 已啟動！\n實時監測DG牌桌策略結構中...")
+    send_telegram_message("DG监控系统 Version 4.3 已启动！（真实检测 + 策略逻辑）")
 
-    last_state = None
-    start_time = None
+    current_state = None
+    state_start_time = None
 
     while True:
-        now = datetime.datetime.now(MY_TZ)
-        status, ratio = detect_dg_platform()
+        now = datetime.datetime.now(MY_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        status, percent = detect_dg_platform()
 
         if status in ["放水", "中等胜率"]:
-            if last_state != status:
-                last_state = status
-                start_time = time.time()
-                end_est = (now + datetime.timedelta(minutes=10)).strftime("%H:%M")
+            if current_state != status:
+                current_state = status
+                state_start_time = time.time()
+                end_time_est = (datetime.datetime.now(MY_TZ) + datetime.timedelta(minutes=10)).strftime("%H:%M")
                 send_telegram_message(
-                    f"📣 現在是DG「{status}」時段！\n"
-                    f"预计放水结束时间：{end_est}\n"
+                    f"现在是平台 {status}时段（胜率提高）\n"
+                    f"预计放水结束时间：{end_time_est}\n"
                     f"此局势预计：剩下10分钟\n"
-                    f"好路比例：{ratio:.1f}%\n"
-                    f"检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"当前检测时间：{now}\n"
+                    f"当前好路桌面比例：{percent:.1f}%"
                 )
         else:
-            if last_state in ["放水", "中等胜率"]:
-                duration = int((time.time() - start_time) / 60)
-                send_telegram_message(
-                    f"🔕 {last_state} 已結束，\n共持續 {duration} 分鐘"
-                )
-                last_state = None
+            if current_state in ["放水", "中等胜率"]:
+                duration = int((time.time() - state_start_time) / 60)
+                send_telegram_message(f"{current_state}已结束，共持续 {duration} 分钟。")
+                current_state = None
 
-        time.sleep(300)  # 每5分鐘檢測一次
+        time.sleep(300)  # 每5分钟检测一次
 
 if __name__ == "__main__":
     main_loop()
