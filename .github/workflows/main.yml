@@ -3,21 +3,21 @@ name: DG Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"  # 每5分钟检测一次
+    - cron: "*/5 * * * *"  # 每5分钟自动触发一次
 
 jobs:
-  build:
+  monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 每次运行最长6小时
+    timeout-minutes: 350  # 每次运行最长5小时50分钟
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -25,5 +25,4 @@ jobs:
           pip install requests selenium pytz webdriver-manager
 
       - name: Run DG Monitor
-        run: |
-          python dg-monitor.py
+        run: python dg-monitor.py
