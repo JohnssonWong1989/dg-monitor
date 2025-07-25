@@ -3,27 +3,25 @@ name: DG Monitor
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"  # 每5分钟检测一次
+    - cron: "*/5 * * * *"  # 每5分钟自动运行
 
 jobs:
-  run-dg-monitor:
+  monitor:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 检出代码
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 安装依赖
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests selenium undetected-chromedriver
+          pip install requests selenium undetected-chromedriver pytz
 
-      - name: 启动 DG 检测脚本
-        run: |
-          echo "开始执行 DG 放水检测 (Version 4.3)"
-          python dg-monitor.py
+      - name: Run DG Monitor script
+        run: python dg-monitor.py
