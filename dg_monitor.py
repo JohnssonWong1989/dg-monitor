@@ -6,29 +6,37 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
-# ========== Telegram 配置 ==========
+# =============================
+# Telegram 配置
+# =============================
 TELEGRAM_BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 TELEGRAM_CHAT_ID = "485427847"
 
-# ========== 时区（马来西亚 GMT+8） ==========
+# 时区（马来西亚 GMT+8）
 MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
 
-# ========== 发送Telegram消息 ==========
+# =============================
+# Telegram发送函数
+# =============================
 def send_telegram_message(msg: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg}
     try:
-        requests.post(url, data=data)
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
         print("Telegram发送失败：", e)
 
-# ========== 牌桌走势逻辑 ==========
-def analyze_table_pattern(history: str):
+# =============================
+# 牌桌分析逻辑
+# =============================
+def analyze_table_pattern(history):
     """
-    逻辑：
-    - 连开 >=5 粒庄/闲 (放水信号)
-    - 连开 >=8 粒为长龙 (强烈放水信号)
+    判断一张牌桌是否符合高胜率（放水）结构：
+    - 连开 >=5 粒庄/闲
+    - 连开 >=8 粒为长龙
     """
     if "庄庄庄庄庄" in history or "闲闲闲闲闲" in history:
         return True
@@ -36,34 +44,38 @@ def analyze_table_pattern(history: str):
         return True
     return False
 
-# ========== 自动滑块验证 ==========
+# =============================
+# 自动滑块验证（如有）
+# =============================
 def solve_slider(driver):
     try:
-        slider = driver.find_element(By.CLASS_NAME, "slider-class")  # 伪类名
+        slider = driver.find_element(By.CLASS_NAME, "slider-class")  # 需调整真实class
         action = ActionChains(driver)
         action.click_and_hold(slider).move_by_offset(260, 0).release().perform()
         time.sleep(2)
     except:
         print("未检测到滑块验证")
 
-# ========== DG 平台检测逻辑 ==========
+# =============================
+# DG平台检测
+# =============================
 def detect_dg_platform():
     """
     真实检测 DG 平台桌面状态：
     1. 打开 dg18.co / wap
     2. 点击免费试玩/Free
     3. 通过安全验证
-    4. 获取桌面数据并分析
-    返回:
-        status: "放水" / "中等胜率" / "收割"
-        percent: 放水结构桌面比例
+    4. 获取桌面数据
+    返回: 状态: "放水" / "中等胜率" / "收割"
+         百分比: 放水结构桌面比例
     """
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
 
-    driver = webdriver.Chrome(options=chrome_options)
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     driver.get("https://dg18.co/wap/")
     time.sleep(5)
 
@@ -77,21 +89,16 @@ def detect_dg_platform():
         driver.quit()
         return ("收割", 0)
 
-    tables = driver.find_elements(By.CLASS_NAME, "table-class")  # 伪类名
+    tables = driver.find_elements(By.CLASS_NAME, "table-class")  # 需调整真实class
     total_tables = len(tables)
     if total_tables == 0:
         driver.quit()
         return ("收割", 0)
 
     good_count = 0
-    bad_count = 0
 
     for t in tables:
         text = t.text
-        # 检测收割特征：单跳、无连
-        if "庄闲庄闲" in text or "闲庄闲庄" in text:
-            bad_count += 1
-        # 检测放水特征：多连、长龙
         if analyze_table_pattern(text):
             good_count += 1
 
@@ -105,9 +112,11 @@ def detect_dg_platform():
     else:
         return ("收割", percent)
 
-# ========== 主循环 ==========
+# =============================
+# 主循环
+# =============================
 def main_loop():
-    send_telegram_message("✅ DG监控系统 Version 4.4 已启动！（真实检测 + 策略逻辑）")
+    send_telegram_message("✅ DG监控系统 Version 4.5 已启动！（真实检测 + 策略逻辑）")
 
     current_state = None
     state_start_time = None
@@ -122,7 +131,7 @@ def main_loop():
                 state_start_time = time.time()
                 end_time_est = (datetime.datetime.now(MY_TZ) + datetime.timedelta(minutes=10)).strftime("%H:%M")
                 send_telegram_message(
-                    f"⚡ 现在是平台 {status} 时段（胜率提高）\n"
+                    f"⚡ 现在是平台 {status}时段（胜率提高）\n"
                     f"预计放水结束时间：{end_time_est}\n"
                     f"此局势预计：剩下10分钟\n"
                     f"当前检测时间：{now}\n"
@@ -131,7 +140,7 @@ def main_loop():
         else:
             if current_state in ["放水", "中等胜率"]:
                 duration = int((time.time() - state_start_time) / 60)
-                send_telegram_message(f"❌ {current_state} 已结束，共持续 {duration} 分钟。")
+                send_telegram_message(f"❌ {current_state}已结束，共持续 {duration} 分钟。")
                 current_state = None
 
         time.sleep(300)  # 每5分钟检测一次
