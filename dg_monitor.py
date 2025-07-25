@@ -1,94 +1,92 @@
 import requests
-import datetime
-import time
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+import pytz
 
+# Telegram 配置
 BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 CHAT_ID = "485427847"
 
-DEFAULT_DURATION = 15  # 初始预计时长（分钟）
+# DG 平台免费试玩链接
+DG_URL = "https://dg18.co/wap/"
 
-def send_telegram(msg):
+# 马来西亚时区
+tz = pytz.timezone("Asia/Kuala_Lumpur")
+
+def send_telegram_message(message: str):
+    """发送 Telegram 通知"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message}
     try:
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        requests.post(url, data=data)
     except Exception as e:
-        print("Telegram发送失败：", e)
+        print(f"发送 Telegram 消息失败: {e}")
 
-def check_dg():
+def fetch_dg_page():
+    """获取 DG 页面 HTML"""
     try:
-        url = "https://dg18.co/wap/"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code != 200:
-            return "收割"
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        tables = soup.get_text()
-
-        score = tables.count("连开") + tables.count("长龙") + tables.count("长连")
-
-        if score >= 7:
-            return "放水"
-        elif score >= 4:
-            return "中等胜率"
+        response = requests.get(DG_URL, timeout=10)
+        response.encoding = 'utf-8'
+        if response.status_code == 200:
+            return response.text
         else:
-            return "收割"
-    except:
-        return "收割"
+            print(f"获取 DG 页面失败: 状态码 {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"请求 DG 出错: {e}")
+        return None
 
-def format_time(minutes_from_now):
-    end_time = (datetime.datetime.now() + datetime.timedelta(minutes=minutes_from_now))
-    return end_time.strftime("%H:%M")
+def analyze_tables(html: str):
+    """分析 DG 页面牌桌走势"""
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.find_all("div")
+    total_tables = len(tables)
+
+    # 模拟检测：统计含有“连”、“长龙”等关键词的桌子
+    long_count = sum(1 for t in tables if "连" in t.get_text() or "龙" in t.get_text())
+    if total_tables == 0:
+        return "收割时段"
+
+    ratio = (long_count / total_tables) * 100
+    if ratio >= 70:
+        return "放水时段"
+    elif 55 <= ratio < 70:
+        return "中等胜率（中上）"
+    else:
+        return "收割时段"
+
+def estimate_end_time():
+    """估计放水结束时间"""
+    current_time = datetime.now(tz)
+    end_time = current_time + timedelta(minutes=10)
+    return end_time.strftime("%I:%M%p"), "剩下10分钟"
 
 def main():
-    send_telegram("✅ DG检测系统已启动（马来西亚时区 GMT+8）")
-    current_status = None
-    start_time = None
-    estimated_end = None
+    current_time = datetime.now(tz).strftime("%Y-%m-%d %I:%M:%S %p")
+    html = fetch_dg_page()
+    if not html:
+        return
 
-    while True:
-        now = datetime.datetime.now()
-        now_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        status = check_dg()
+    status = analyze_tables(html)
 
-        if status == "放水":
-            if current_status != "放水":
-                start_time = now
-                estimated_end = now + datetime.timedelta(minutes=DEFAULT_DURATION)
-                send_telegram(
-                    f"🔥 现在是平台【放水时段】（胜率高）！\n"
-                    f"预计放水结束时间：{estimated_end.strftime('%H:%M')}\n"
-                    f"此局势预计：剩下 {DEFAULT_DURATION} 分钟"
-                )
-            else:
-                # 延长预计时间（如果仍在放水）
-                if (now > estimated_end - datetime.timedelta(minutes=5)):
-                    estimated_end = now + datetime.timedelta(minutes=DEFAULT_DURATION)
-            current_status = "放水"
-
-        elif status == "中等胜率":
-            if current_status != "中等胜率":
-                start_time = now
-                estimated_end = now + datetime.timedelta(minutes=DEFAULT_DURATION)
-                send_telegram(
-                    f"📡 检测到【中等胜率（中上）】时段\n"
-                    f"预计结束时间：{estimated_end.strftime('%H:%M')}\n"
-                    f"此局势预计：剩下 {DEFAULT_DURATION} 分钟"
-                )
-            else:
-                if (now > estimated_end - datetime.timedelta(minutes=5)):
-                    estimated_end = now + datetime.timedelta(minutes=DEFAULT_DURATION)
-            current_status = "中等胜率"
-
-        else:
-            if current_status in ["放水", "中等胜率"]:
-                end_time = now
-                duration = (end_time - start_time).seconds // 60 if start_time else 0
-                send_telegram(f"⚠️ 放水已结束，共持续 {duration} 分钟。")
-            current_status = "收割"
-
-        time.sleep(300)
+    if status == "放水时段":
+        end_time, remain = estimate_end_time()
+        send_telegram_message(
+            f"🔥 现在是平台【放水时段】（胜率高）！\n"
+            f"预计放水结束时间：{end_time}\n"
+            f"此局势预计：{remain}\n"
+            f"检测时间：{current_time}"
+        )
+    elif status == "中等胜率（中上）":
+        end_time, remain = estimate_end_time()
+        send_telegram_message(
+            f"⚡ 平台【中等胜率（中上）】\n"
+            f"预计结束时间：{end_time}\n"
+            f"此局势预计：{remain}\n"
+            f"检测时间：{current_time}"
+        )
+    else:
+        print(f"{current_time} - 当前为收割时段，不提醒")
 
 if __name__ == "__main__":
     main()
