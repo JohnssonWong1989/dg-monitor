@@ -1,92 +1,91 @@
+import os
+import asyncio
+import datetime
+from playwright.async_api import async_playwright
 import requests
-from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
-import pytz
 
-# Telegram 配置
-BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
-CHAT_ID = "485427847"
+# Telegram配置
+TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
+TELEGRAM_CHAT_ID = "485427847"
 
-# DG 平台免费试玩链接
-DG_URL = "https://dg18.co/wap/"
+DG_URLS = [
+    "https://dg18.co/",
+    "https://dg18.co/wap/"
+]
 
-# 马来西亚时区
-tz = pytz.timezone("Asia/Kuala_Lumpur")
+# 全局状态记录
+last_state = "none"
+last_start_time = None
 
+# Telegram发送消息
 def send_telegram_message(message: str):
-    """发送 Telegram 通知"""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
-    try:
-        requests.post(url, data=data)
-    except Exception as e:
-        print(f"发送 Telegram 消息失败: {e}")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
 
-def fetch_dg_page():
-    """获取 DG 页面 HTML"""
-    try:
-        response = requests.get(DG_URL, timeout=10)
-        response.encoding = 'utf-8'
-        if response.status_code == 200:
-            return response.text
+# 分析DG桌面HTML结构 (这里用简单逻辑模拟)
+def analyze_tables(html: str) -> str:
+    """
+    返回状态：
+    - 'water'  : 放水时段
+    - 'medium' : 中等胜率（中上）
+    - 'low'    : 胜率中等 / 收割
+    """
+    # 模拟规则判断：这里用 "庄庄庄庄" 和 "闲闲闲闲" 出现次数估算
+    long_count = html.count("庄庄庄庄") + html.count("闲闲闲闲")
+    if long_count > 15:  # 模拟 >=70%
+        return 'water'
+    elif 8 <= long_count <= 15:  # 模拟 55-69%
+        return 'medium'
+    return 'low'
+
+async def fetch_dg_tables():
+    combined_html = ""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        for url in DG_URLS:
+            await page.goto(url, timeout=60000)
+            # 点击“免费试玩” / “Free”
+            try:
+                await page.click("text=免费试玩")
+            except:
+                try:
+                    await page.click("text=Free")
+                except:
+                    pass
+            await page.wait_for_timeout(5000)  # 等待跳转加载
+            combined_html += await page.content()
+        await browser.close()
+    return combined_html
+
+async def main():
+    global last_state, last_start_time
+    html = await fetch_dg_tables()
+    state = analyze_tables(html)
+
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    if state == 'water':
+        if last_state != 'water':
+            last_state = 'water'
+            last_start_time = now
+            send_telegram_message(f"【放水时段】\n时间：{now_str}\n预计持续中...")
         else:
-            print(f"获取 DG 页面失败: 状态码 {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"请求 DG 出错: {e}")
-        return None
+            # 更新预计剩余时间
+            elapsed = (now - last_start_time).seconds // 60
+            send_telegram_message(f"【放水持续中】\n已持续：{elapsed} 分钟\n时间：{now_str}")
 
-def analyze_tables(html: str):
-    """分析 DG 页面牌桌走势"""
-    soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("div")
-    total_tables = len(tables)
+    elif state == 'medium':
+        if last_state != 'medium':
+            last_state = 'medium'
+            send_telegram_message(f"【中等胜率（中上）】\n时间：{now_str}\n请注意观察，接近放水结构。")
 
-    # 模拟检测：统计含有“连”、“长龙”等关键词的桌子
-    long_count = sum(1 for t in tables if "连" in t.get_text() or "龙" in t.get_text())
-    if total_tables == 0:
-        return "收割时段"
-
-    ratio = (long_count / total_tables) * 100
-    if ratio >= 70:
-        return "放水时段"
-    elif 55 <= ratio < 70:
-        return "中等胜率（中上）"
-    else:
-        return "收割时段"
-
-def estimate_end_time():
-    """估计放水结束时间"""
-    current_time = datetime.now(tz)
-    end_time = current_time + timedelta(minutes=10)
-    return end_time.strftime("%I:%M%p"), "剩下10分钟"
-
-def main():
-    current_time = datetime.now(tz).strftime("%Y-%m-%d %I:%M:%S %p")
-    html = fetch_dg_page()
-    if not html:
-        return
-
-    status = analyze_tables(html)
-
-    if status == "放水时段":
-        end_time, remain = estimate_end_time()
-        send_telegram_message(
-            f"🔥 现在是平台【放水时段】（胜率高）！\n"
-            f"预计放水结束时间：{end_time}\n"
-            f"此局势预计：{remain}\n"
-            f"检测时间：{current_time}"
-        )
-    elif status == "中等胜率（中上）":
-        end_time, remain = estimate_end_time()
-        send_telegram_message(
-            f"⚡ 平台【中等胜率（中上）】\n"
-            f"预计结束时间：{end_time}\n"
-            f"此局势预计：{remain}\n"
-            f"检测时间：{current_time}"
-        )
-    else:
-        print(f"{current_time} - 当前为收割时段，不提醒")
+    else:  # low
+        if last_state == 'water' and last_start_time:
+            elapsed = (now - last_start_time).seconds // 60
+            send_telegram_message(f"【放水已结束】\n结束时间：{now_str}\n本轮共持续：{elapsed} 分钟")
+        last_state = 'low'
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
