@@ -1,25 +1,28 @@
-name: DG Monitor
+name: DG Baccarat Monitor
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"  # 每5分钟运行
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"  # 每5分钟检测一次
 
 jobs:
-  run:
+  monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 350  # 防止GitHub Actions 6小时限制
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
-          pip install requests beautifulsoup4 pytz
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 playwright==1.39.0
+          playwright install chromium
 
-      - name: Run DG Monitor
-        run: python dg_monitor.py
+      - name: Run DG Monitor Script
+        run: python monitor.py
