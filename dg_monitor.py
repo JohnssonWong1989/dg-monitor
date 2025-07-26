@@ -125,7 +125,7 @@ def monitor():
 
     # 首次启动提醒
     if first_run:
-        send_telegram_message("DG监控系统已启动 (GMT+8)")
+        send_telegram_message("✅DG监控系统已启动 - 当前时间：{now_time} (GMT+8)")
         first_run = False
 
     # 检测平台
@@ -135,23 +135,23 @@ def monitor():
         if last_status != 'flood':
             flood_start_time = now
             send_telegram_message(
-                f"【放水时段（提高胜率）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"预计放水结束时间：{(now + timedelta(minutes=10)).strftime('%H:%M')}\n此局势预计：剩下10分钟"
+                f"🔥【放水时段（提高胜率）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"⚠️预计放水结束时间：{(now + timedelta(minutes=10)).strftime('%H:%M')}\n此局势预计：剩下10分钟"
             )
         last_status = 'flood'
 
     elif status == 'medium_high':
         if last_status != 'medium_high':
             send_telegram_message(
-                f"【中等胜率（中上）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"预计放水结束时间：{(now + timedelta(minutes=5)).strftime('%H:%M')}\n此局势预计：剩下5分钟"
+                f"📡【中等胜率（中上）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"⚠️预计放水结束时间：{(now + timedelta(minutes=5)).strftime('%H:%M')}\n此局势预计：剩下5分钟"
             )
         last_status = 'medium_high'
 
     else:  # bad
         if last_status == 'flood' and flood_start_time:
             duration = (now - flood_start_time).seconds // 60
-            send_telegram_message(f"放水已结束，共持续 {duration} 分钟。")
+            send_telegram_message(f"⚠️⚠️放水已结束⚠️，共持续 {duration} 分钟。")
             flood_start_time = None
         last_status = 'bad'
 
