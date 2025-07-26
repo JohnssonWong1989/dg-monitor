@@ -92,11 +92,6 @@ def check_dg_status():
 def main_loop():
     global start_notified, last_status, last_start_time
 
-    if not start_notified:
-        now = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
-        send_telegram_message(f"✅ DG监控已启动 - {now} (GMT+8)")
-        start_notified = True
-
     current_status = check_dg_status()
     now = datetime.datetime.now(tz)
 
