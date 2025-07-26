@@ -125,7 +125,7 @@ def monitor():
 
     # 首次启动提醒
     if first_run:
-        send_telegram_message(f"✅ DG监控已启动 - 当前时间：{now} (GMT+8)")
+        send_telegram_message("✅ DG监控已启动 - 当前时间：{now} (GMT+8)")
         first_run = False
 
     # 检测平台
