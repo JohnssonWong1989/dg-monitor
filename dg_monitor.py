@@ -19,6 +19,16 @@ import numpy as np
 TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 TELEGRAM_CHAT_ID = "485427847"
 
+# ===================
+# 检测规则参数
+# ===================
+CHECK_INTERVAL = 300  # 每 5 分钟检测一次
+TIMEZONE_OFFSET = 8   # GMT+8 时区
+MIN_LONG_DRAGON = 5   # 连续 5 粒以上算长龙
+MIN_SUPER_DRAGON = 8  # 超级长龙
+MIN_TABLE_FOR_FLOOD = 0.7  # 放水时段比例阈值 70%
+MIN_TABLE_FOR_MEDIUM = 0.55 # 中等胜率中上阈值 55%
+
 # ================================
 # 通知函数
 # ================================
@@ -123,7 +133,7 @@ def monitor_loop():
                 duration = 20
 
                 message = (
-                    f"【{result}】\n"
+                    f"🔥【{result}】\n"
                     f"检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
                     f"预计放水结束时间：{end_time.strftime('%H:%M')}\n"
                     f"此局势预计：剩下 {duration} 分钟"
