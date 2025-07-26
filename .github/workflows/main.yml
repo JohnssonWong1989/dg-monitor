@@ -25,4 +25,4 @@ jobs:
           pip install requests selenium opencv-python numpy pytz
 
       - name: 运行 DG 监控
-        run: python monitor.py
+        run: python dg_monitor.py
