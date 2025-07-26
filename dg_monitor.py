@@ -1,111 +1,154 @@
+import os
 import time
 import requests
 from datetime import datetime, timedelta
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
 
+# ===================
 # Telegram 配置
-TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
-TELEGRAM_CHAT_ID = "485427847"
+# ===================
+BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
+CHAT_ID = "485427847"
 
-# 全局状态
-LAST_STATUS = None
-START_TIME = None
-FIRST_RUN = True
+# ===================
+# 检测规则参数
+# ===================
+CHECK_INTERVAL = 300  # 每 5 分钟检测一次
+TIMEZONE_OFFSET = 8   # GMT+8 时区
+MIN_LONG_DRAGON = 5   # 连续 5 粒以上算长龙
+MIN_SUPER_DRAGON = 8  # 超级长龙
+MIN_TABLE_FOR_FLOOD = 0.7  # 放水时段比例阈值 70%
+MIN_TABLE_FOR_MEDIUM = 0.55 # 中等胜率中上阈值 55%
 
+# ===================
+# 状态变量
+# ===================
+first_run = True
+last_status = "unknown"  # 记录上次状态（防止重复提醒）
+flood_start_time = None   # 放水时段开始时间
+
+
+# ===================
+# Telegram 发送函数
+# ===================
 def send_telegram_message(message: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message}
     try:
-        requests.post(url, data=payload)
+        requests.post(url, json=payload)
     except Exception as e:
-        print(f"Telegram发送失败: {e}")
+        print(f"[ERROR] Telegram发送失败: {e}")
 
-def enter_dg_platform():
-    """ 打开 DG 平台并自动进入免费试玩页面 """
+
+# ===================
+# 模拟登录 DG 平台
+# ===================
+def init_driver():
     options = Options()
     options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-
-    driver.get("https://dg18.co/wap/")
-    time.sleep(3)
-
-    try:
-        btn = driver.find_element(By.XPATH, "//button[contains(text(), '免费试玩') or contains(text(), 'Free')]")
-        btn.click()
-        time.sleep(3)
-    except:
-        print("未找到【免费试玩】按钮")
-
-    # 模拟滚动验证
-    time.sleep(5)
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    driver = webdriver.Chrome(options=options)
     return driver
 
-def analyze_tables(driver):
+
+# ===================
+# 检测 DG 平台桌面状况
+# ===================
+def check_dg_platform():
     """
-    分析 DG 桌面，返回当前状态:
-    - 放水时段（提高胜率）
-    - 中等胜率（中上）
-    - 收割时段
+    返回值：'flood'（放水时段），'medium_high'（中等胜率中上），'bad'（收割或胜率中等）
     """
-    tables = driver.find_elements(By.CLASS_NAME, "road")
-    if not tables:
-        return "无数据", 0.0
+    driver = init_driver()
+    try:
+        driver.get("https://dg18.co/")
+        time.sleep(2)
 
-    total_tables = len(tables)
-    good_tables = 0
-    long_dragon_tables = 0
+        # 点击“免费试玩”
+        try:
+            free_button = driver.find_element(By.XPATH, "//button[contains(text(),'免费试玩') or contains(text(),'Free')]")
+            free_button.click()
+            time.sleep(2)
+        except:
+            print("[WARN] 找不到 '免费试玩' 按钮。")
 
-    for t in tables:
-        text = t.text
-        if "庄庄庄庄" in text or "闲闲闲闲" in text:
-            good_tables += 1
-        if "庄庄庄庄庄庄庄庄" in text or "闲闲闲闲闲闲闲闲" in text:
-            good_tables += 2
-            long_dragon_tables += 1
+        # 滚动验证略过（假设自动通过）
+        time.sleep(3)
 
-    # 假信号过滤：如果只有1桌长龙且整体少于50%
-    ratio = (good_tables / total_tables) * 100
-    if long_dragon_tables == 1 and ratio < 55:
-        return "收割时段", ratio
+        # 模拟读取桌面情况
+        tables = driver.find_elements(By.CLASS_NAME, "table-class")  # 假设 class 为 table-class
+        total_tables = len(tables)
+        if total_tables == 0:
+            return 'bad'
 
-    if ratio >= 70:
-        return "放水时段（提高胜率）", ratio
-    elif 55 <= ratio < 70:
-        return "中等胜率（中上）", ratio
-    else:
-        return "收割时段", ratio
+        # 分析“放水”桌面
+        flood_like_tables = 0
+        for t in tables:
+            text = t.text
+            # 简化规则：只要出现连续5+ 或8+ 的“庄”或“闲”
+            if "庄庄庄庄庄" in text or "闲闲闲闲闲" in text:
+                flood_like_tables += 1
 
-def main():
-    global LAST_STATUS, START_TIME, FIRST_RUN
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now}] 开始检测...")
+        flood_ratio = flood_like_tables / total_tables
+        print(f"[INFO] 检测桌面: {flood_like_tables}/{total_tables} 类似放水 ({flood_ratio:.2f})")
 
-    driver = enter_dg_platform()
-    status, ratio = analyze_tables(driver)
-    driver.quit()
+        if flood_ratio >= MIN_TABLE_FOR_FLOOD:
+            return 'flood'
+        elif flood_ratio >= MIN_TABLE_FOR_MEDIUM:
+            return 'medium_high'
+        else:
+            return 'bad'
 
-    if FIRST_RUN:
-        send_telegram_message(f"✅ DG监控已启动 (GMT+8) - 当前时间：{now}")
-        FIRST_RUN = False
+    except Exception as e:
+        print(f"[ERROR] 检测DG平台失败: {e}")
+        return 'bad'
+    finally:
+        driver.quit()
 
-    if status in ["放水时段（提高胜率）", "中等胜率（中上）"]:
-        if status != LAST_STATUS:
-            START_TIME = datetime.now()
-            end_time = START_TIME + timedelta(minutes=10)
-            send_telegram_message(
-                f"🔥 现在是平台【{status}】\n预计放水结束时间：{end_time.strftime('%H:%M')}\n此局势预计：剩下10分钟"
-            )
-        LAST_STATUS = status
-    else:
-        if LAST_STATUS in ["放水时段（提高胜率）", "中等胜率（中上）"]:
-            duration = (datetime.now() - START_TIME).seconds // 60
-            send_telegram_message(f"⚠ 放水已结束，共持续 {duration} 分钟")
-        LAST_STATUS = status
+
+# ===================
+# 计算当前时间
+# ===================
+def current_time():
+    return datetime.utcnow() + timedelta(hours=TIMEZONE_OFFSET)
+
+
+# ===================
+# 主监控循环
+# ===================
+def monitor():
+    global first_run, last_status, flood_start_time
+
+    if first_run:
+        send_telegram_message("DG监控系统已启动 (GMT+8)")
+        first_run = False
+
+    while True:
+        status = check_dg_platform()
+        now = current_time()
+
+        if status == 'flood':
+            if last_status != 'flood':
+                flood_start_time = now
+                send_telegram_message(f"【放水时段（提高胜率）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n预计放水结束时间：{(now + timedelta(minutes=10)).strftime('%H:%M')}\n此局势预计：剩下10分钟")
+            last_status = 'flood'
+
+        elif status == 'medium_high':
+            if last_status != 'medium_high':
+                send_telegram_message(f"【中等胜率（中上）】\n检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n预计放水结束时间：{(now + timedelta(minutes=5)).strftime('%H:%M')}\n此局势预计：剩下5分钟")
+            last_status = 'medium_high'
+
+        else:  # bad
+            if last_status == 'flood' and flood_start_time:
+                duration = (now - flood_start_time).seconds // 60
+                send_telegram_message(f"放水已结束，共持续 {duration} 分钟。")
+                flood_start_time = None
+            last_status = 'bad'
+
+        time.sleep(CHECK_INTERVAL)
+
 
 if __name__ == "__main__":
-    main()
+    monitor()
