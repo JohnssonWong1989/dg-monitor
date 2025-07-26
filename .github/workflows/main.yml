@@ -1,15 +1,13 @@
-name: DG Monitor
+name: DG Monitor V4.7
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"  # 每5分钟检测一次
+  workflow_dispatch:
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,6 +22,5 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium requests webdriver-manager
 
-      - name: Run DG Monitor Script
-        run: |
-          python dg_monitor.py
+      - name: Run DG Monitor
+        run: python dg_monitor.py
