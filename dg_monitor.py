@@ -60,6 +60,34 @@ def analyze_table_image(image):
     else:
         return "收割"
 
+def analyze_tables(driver):
+    """ 检测桌面走势并分类 """
+    tables = driver.find_elements(By.CLASS_NAME, "road")
+    total = len(tables)
+    score = 0
+    long_dragon_count = 0
+
+    for t in tables:
+        text = t.text
+        # 长连判断
+        if "庄庄庄庄" in text or "闲闲闲闲" in text:
+            score += 1
+        # 超长龙判断
+        if "庄庄庄庄庄庄庄庄" in text or "闲闲闲闲闲闲闲闲" in text:
+            score += 2
+            long_dragon_count += 1
+
+    ratio = (score / max(total, 1)) * 100
+    # 假信号过滤：单桌长龙 + 其他桌很差
+    if long_dragon_count == 1 and ratio < 55:
+        return "收割时段", ratio
+    if ratio >= 70:
+        return "放水时段（提高胜率）", ratio
+    elif 55 <= ratio < 70:
+        return "中等胜率（中上）", ratio
+    else:
+        return "收割时段", ratio
+        
 def check_dg_status():
     """
     进入DG平台，抓取牌面截图，分析整体胜率状态
