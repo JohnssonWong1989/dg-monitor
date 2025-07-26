@@ -1,23 +1,18 @@
 import time
-import datetime
+import cv2
+import numpy as np
 import pytz
 import requests
+from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from PIL import Image
-import io
-import cv2
-import numpy as np
 
-# ================================
 # Telegram 配置
-# ================================
 TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
-TELEGRAM_CHAT_ID = "485427847"
+CHAT_ID = "485427847"
 
 # ===================
 # 检测规则参数
@@ -29,127 +24,91 @@ MIN_SUPER_DRAGON = 8  # 超级长龙
 MIN_TABLE_FOR_FLOOD = 0.7  # 放水时段比例阈值 70%
 MIN_TABLE_FOR_MEDIUM = 0.55 # 中等胜率中上阈值 55%
 
-# ================================
-# 通知函数
-# ================================
-def send_telegram_message(message: str):
+# 时区设置
+MY_TZ = pytz.timezone("Asia/Kuala_Lumpur")
+
+# 放水时段提醒状态
+active_alert = False
+alert_start_time = None
+
+def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    data = {"chat_id": CHAT_ID, "text": message}
     try:
         requests.post(url, data=data)
     except Exception as e:
-        print(f"Telegram 发送失败: {e}")
+        print(f"Telegram发送失败: {e}")
 
-# ================================
-# 时间函数（GMT+8）
-# ================================
 def get_current_time():
-    tz = pytz.timezone("Asia/Kuala_Lumpur")
-    return datetime.datetime.now(tz)
+    return datetime.now(MY_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-# ================================
-# 检测桌面牌路核心逻辑
-# ================================
-def analyze_table_image(image):
-    """
-    分析牌路截图，识别放水/中等胜率
-    """
-    img_gray = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY_INV)
+# 图像特征检测（放水、胜率中上、收割）
+def analyze_table_image(image_path):
+    img = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if img is None:
+        return "unknown"
 
-    white_area = cv2.countNonZero(thresh)
-    total_area = thresh.shape[0] * thresh.shape[1]
-    ratio = white_area / total_area
+    # 转灰度
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    white_pixel_ratio = np.sum(thresh == 255) / (thresh.size)
 
-    # 70% 以上为放水
-    if ratio >= 0.7:
-        return "放水时段（提高胜率）"
-    elif 0.55 <= ratio < 0.7:
+    # 基于白色像素比例粗略判定
+    if white_pixel_ratio > 0.70:
+        return "放水时段"
+    elif 0.55 < white_pixel_ratio <= 0.69:
         return "中等胜率（中上）"
+    elif 0.35 < white_pixel_ratio <= 0.55:
+        return "胜率中等"
     else:
-        return "收割/无放水"
+        return "收割时段"
 
-# ================================
-# 自动化流程：进入 DG 平台并截图
-# ================================
-def get_dg_screenshot():
+# 自动访问 DG 平台并截图
+def fetch_dg_screenshot():
     options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--window-size=1920,1080")
-
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
     driver = webdriver.Chrome(options=options)
-    driver.get("https://dg18.co/wap/")
 
     try:
-        # 等待 "免费试玩" 或 "Free" 按钮
-        free_btn = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), '免费试玩') or contains(text(), 'Free')]"))
-        )
-        free_btn.click()
+        driver.get("https://dg18.co/wap/")
+        WebDriverWait(driver, 20).until(EC.element_to_be_clickable((By.LINK_TEXT, "免费试玩"))).click()
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.TAG_NAME, "canvas")))
 
-        # 等待验证码 (假设有滚动验证)
-        time.sleep(5)  # 这里可以加入验证码处理逻辑
-
-        # 等待页面加载
-        time.sleep(8)
-
-        # 截图
-        screenshot = driver.get_screenshot_as_png()
+        screenshot_path = "/tmp/dg_table.png"
+        driver.save_screenshot(screenshot_path)
         driver.quit()
-        return Image.open(io.BytesIO(screenshot))
-
+        return screenshot_path
     except Exception as e:
-        print(f"DG 访问失败: {e}")
         driver.quit()
+        print(f"DG截图失败: {e}")
         return None
 
-# ================================
-# 主检测逻辑
-# ================================
-def monitor_loop():
-    send_telegram_message("✅ DG 监控系统已启动 (V5.2) - 马来西亚 GMT+8 时间")
-
-    current_status = None
-    start_time = None
-
+def monitor_dg_tables():
+    global active_alert, alert_start_time
     while True:
-        now = get_current_time()
-        print(f"检测时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[{get_current_time()}] 正在检测DG牌面...")
+        screenshot = fetch_dg_screenshot()
+        if screenshot:
+            status = analyze_table_image(screenshot)
+            print(f"识别结果：{status}")
 
-        screenshot = get_dg_screenshot()
-        if screenshot is None:
-            time.sleep(300)
-            continue
+            if status in ["放水时段", "中等胜率（中上）"]:
+                if not active_alert:
+                    active_alert = True
+                    alert_start_time = time.time()
+                    send_telegram_message(
+                        f"🔥当前平台状态：{status}\n时间：{get_current_time()}\n预计放水结束时间：{(datetime.now(MY_TZ) + timedelta(minutes=10)).strftime('%H:%M')}\n此局势预计：剩下10分钟"
+                    )
+            else:
+                if active_alert:
+                    duration = int((time.time() - alert_start_time) / 60)
+                    send_telegram_message(f"⚠️放水已结束，共持续 {duration} 分钟。")
+                    active_alert = False
 
-        result = analyze_table_image(screenshot)
-        print(f"检测结果: {result}")
-
-        if result in ["放水时段（提高胜率）", "中等胜率（中上）"]:
-            if current_status != result:
-                # 计算预计结束时间（假设 20 分钟放水期）
-                end_time = now + datetime.timedelta(minutes=20)
-                duration = 20
-
-                message = (
-                    f"🔥【{result}】\n"
-                    f"检测时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    f"预计放水结束时间：{end_time.strftime('%H:%M')}\n"
-                    f"此局势预计：剩下 {duration} 分钟"
-                )
-                send_telegram_message(message)
-                current_status = result
-                start_time = now
-        else:
-            if current_status is not None:
-                elapsed = int((now - start_time).total_seconds() / 60)
-                send_telegram_message(f"⚠️ 放水已结束，共持续 {elapsed} 分钟。")
-                current_status = None
-                start_time = None
-
-        # 每 5 分钟检测一次
-        time.sleep(300)
+        time.sleep(300)  # 每5分钟检测一次
 
 if __name__ == "__main__":
-    monitor_loop()
+    send_telegram_message(f"✅检测系统已启动！时间：{get_current_time()}")
+    monitor_dg_tables()
