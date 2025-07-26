@@ -1,7 +1,7 @@
 import requests
 import time
+import datetime
 import pytz
-from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -26,90 +26,95 @@ MIN_TABLE_FOR_MEDIUM = 0.55 # 中等胜率中上阈值 55%
 # 时区
 tz = pytz.timezone("Asia/Kuala_Lumpur")
 
-# 检测标记
-first_start = True
-in_fangshui = False
-fangshui_start_time = None
+# 是否已发送启动提醒
+startup_notified = False
 
-def send_telegram_message(text):
+def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
         requests.post(url, json=payload)
     except Exception as e:
-        print("Telegram发送失败：", e)
+        print(f"Telegram 发送失败: {e}")
+
+def analyze_table_image(image_path):
+    """
+    使用 OpenCV 检测长连、长龙的比例。
+    返回: '放水时段', '中等胜率', 或 '收割'
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        return "收割"
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
+    white_ratio = np.sum(thresh == 255) / (thresh.size)
+
+    # 模拟判断逻辑
+    if white_ratio > 0.7:
+        return "放水时段"
+    elif 0.55 <= white_ratio <= 0.69:
+        return "中等胜率"
+    else:
+        return "收割"
 
 def get_current_time():
-    return datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-def analyze_tables(image):
+def detect_platform():
     """
-    用OpenCV分析桌面截图，判断是否放水时段或中等胜率（中上）。
-    这里模拟逻辑：
-    - 如果检测到“长连/长龙”数量超过阈值，返回 'fangshui'
-    - 如果检测到中等数量长连，返回 'medium_high'
-    - 否则返回 'normal'
+    进入DG平台检测桌面截图
     """
-    # 真实检测需要基于图片颜色/连珠模式，这里假设分析逻辑
-    # TODO: 在真实环境下替换此逻辑
-    return np.random.choice(["fangshui", "medium_high", "normal"], p=[0.1, 0.2, 0.7])
-
-def monitor_dg():
-    global first_start, in_fangshui, fangshui_start_time
-
-    if first_start:
-        send_telegram_message(f"✅ DG监控已启动 ({get_current_time()})，开始每5分钟检测一次...")
-        first_start = False
-
-    # 使用 Selenium 进入 DG 平台
     try:
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-dev-shm-usage")
 
         driver = webdriver.Chrome(options=chrome_options)
+        driver.set_page_load_timeout(60)
         driver.get("https://dg18.co/wap/")
+        time.sleep(5)
 
-        time.sleep(5)  # 等待页面加载
-        screenshot_path = "/tmp/dg_screen.png"
+        # 点击免费试玩
+        try:
+            free_btn = driver.find_element(By.XPATH, "//button[contains(text(), '免费试玩') or contains(text(), 'Free')]")
+            free_btn.click()
+            time.sleep(5)
+        except:
+            pass
+
+        screenshot_path = "dg_screen.png"
         driver.save_screenshot(screenshot_path)
         driver.quit()
 
-        # OpenCV 检测
-        img = cv2.imread(screenshot_path)
-        status = analyze_tables(img)
-
-        if status == "fangshui":
-            if not in_fangshui:
-                fangshui_start_time = datetime.now(tz)
-                in_fangshui = True
-                send_telegram_message(
-                    f"🔥 [放水时段] 检测到DG平台胜率提高！\n"
-                    f"当前时间：{get_current_time()}\n"
-                    f"预计持续中，请立即关注入场机会。"
-                )
-        elif status == "medium_high":
-            send_telegram_message(
-                f"🔔 [中等胜率（中上）] 当前DG平台部分桌面有长连/多连迹象。\n"
-                f"当前时间：{get_current_time()}"
-            )
-        else:
-            if in_fangshui:
-                duration = int((datetime.now(tz) - fangshui_start_time).total_seconds() / 60)
-                send_telegram_message(
-                    f"⚠️ 放水已结束，共持续 {duration} 分钟。\n"
-                    f"当前时间：{get_current_time()}"
-                )
-                in_fangshui = False
+        return analyze_table_image(screenshot_path)
 
     except Exception as e:
-        send_telegram_message(f"❌ DG监控异常：{str(e)}")
+        print(f"平台检测出错: {e}")
+        return "收割"
 
-def main_loop():
-    while True:
-        monitor_dg()
-        time.sleep(300)  # 每5分钟检测一次
+def main():
+    global startup_notified
+    if not startup_notified:
+        send_telegram_message(f"✅ DG 监控系统已启动 ({get_current_time()})")
+        startup_notified = True
+
+    status = detect_platform()
+
+    if status == "放水时段":
+        now = datetime.datetime.now(tz)
+        end_time = (now + datetime.timedelta(minutes=10)).strftime("%H:%M")
+        send_telegram_message(
+            f"🔥 现在是平台放水时段！\n当前时间：{get_current_time()}\n预计放水结束时间：{end_time}\n此局势预计：剩下10分钟"
+        )
+    elif status == "中等胜率":
+        now = datetime.datetime.now(tz)
+        end_time = (now + datetime.timedelta(minutes=5)).strftime("%H:%M")
+        send_telegram_message(
+            f"⚠️ 现在是中等胜率（中上）时段。\n当前时间：{get_current_time()}\n预计结束时间：{end_time}\n此局势预计：剩下5分钟"
+        )
 
 if __name__ == "__main__":
-    main_loop()
+    main()
