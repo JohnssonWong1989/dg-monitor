@@ -3,16 +3,19 @@ import requests
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from webdriver_manager.chrome import ChromeDriverManager
 
 # Telegram 配置
 TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 TELEGRAM_CHAT_ID = "485427847"
 
+# 状态变量
+INITIAL_START = True   # 用于首次启动提醒
+
+# Telegram 消息发送
 def send_telegram_message(message: str):
-    """发送 Telegram 消息"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
@@ -20,51 +23,53 @@ def send_telegram_message(message: str):
     except Exception as e:
         print(f"[错误] 无法发送Telegram消息: {e}")
 
+# 初始化 Selenium
 def init_driver():
-    """初始化 Selenium Chrome Driver"""
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
-    try:
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        return driver
-    except Exception as e:
-        send_telegram_message(f"❌ [DG监控错误] Chrome初始化失败: {e}")
-        raise
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=chrome_options)
 
+# 进入DG平台
 def enter_dg_platform():
-    """进入DG平台并点击免费试玩"""
     driver = init_driver()
+    driver.get("https://dg18.co/")
+    time.sleep(5)
     try:
-        driver.get("https://dg18.co/")
+        free_button = driver.find_element(By.XPATH, "//a[contains(text(), '免费试玩') or contains(text(), 'Free')]")
+        free_button.click()
         time.sleep(5)
-        try:
-            free_button = driver.find_element(By.XPATH, "//a[contains(text(), '免费试玩') or contains(text(), 'Free')]")
-            free_button.click()
-            time.sleep(5)  # 等待跳转
-        except:
-            pass
-        return driver
-    except Exception as e:
-        send_telegram_message(f"❌ [DG监控错误] 进入DG平台失败: {e}")
-        driver.quit()
-        raise
+    except:
+        pass
+    return driver
 
+# 分析桌面局势
 def analyze_tables(driver):
-    """分析 DG 桌面局势"""
     try:
         tables = driver.find_elements(By.CSS_SELECTOR, ".table-item")
         total_tables = len(tables)
         if total_tables == 0:
             return "收割时段", 0
 
-        # 假设class中包含 'long' 代表长连 (需按DG页面实际HTML调整)
-        long_trends = [t for t in tables if "long" in t.get_attribute("class")]
+        # 检查“长连 / 长龙”桌子
+        long_trends = []
+        for t in tables:
+            classes = t.get_attribute("class").lower()
+            # 假设 class 包含 'long' 或 'streak' 表示长龙（需按DG实际结构改）
+            if "long" in classes or "streak" in classes:
+                long_trends.append(t)
+
         long_count = len(long_trends)
         ratio = (long_count / total_tables) * 100
 
+        # 假信号过滤：如果仅有1桌长连且其他桌混乱，不算放水
+        if long_count <= 1 and ratio < 55:
+            return "收割时段", ratio
+
+        # 判断时段
         if ratio >= 70:
             return "放水时段", ratio
         elif 55 <= ratio < 70:
@@ -72,13 +77,18 @@ def analyze_tables(driver):
         else:
             return "收割时段", ratio
     except Exception as e:
-        send_telegram_message(f"❌ [DG监控错误] 分析桌面失败: {e}")
+        print(f"分析桌面时出错: {e}")
         return "收割时段", 0
 
+# 监控函数
 def monitor():
-    send_telegram_message("✅ [DG检测系统已启动]（马来西亚 GMT+8）")
+    global INITIAL_START
     last_status = None
     start_time = None
+
+    if INITIAL_START:
+        send_telegram_message("✅ DG监控系统已启动（马来西亚 GMT+8）。")
+        INITIAL_START = False
 
     while True:
         try:
@@ -101,7 +111,7 @@ def monitor():
 
             last_status = status
         except Exception as e:
-            send_telegram_message(f"❌ [DG监控循环错误]: {e}")
+            send_telegram_message(f"❌ [DG监控错误]: {e}")
 
         time.sleep(300)  # 每5分钟检测一次
 
