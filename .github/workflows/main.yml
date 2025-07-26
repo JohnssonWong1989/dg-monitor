@@ -1,13 +1,15 @@
 name: DG Monitor
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"  # 每 5 分钟运行一次
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"   # 每5分钟自动执行一次
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v3
@@ -19,7 +21,9 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install selenium pillow requests opencv-python pytz
+          python -m pip install --upgrade pip
+          pip install requests selenium opencv-python numpy pytz
 
       - name: 运行 DG 监控
-        run: python dg_monitor.py
+        run: |
+          python monitor.py
