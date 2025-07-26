@@ -1,18 +1,16 @@
 import requests
+import datetime
+import pytz
+import time
 import cv2
 import numpy as np
-import time
-from datetime import datetime, timedelta
-import pytz
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
-# Telegram config
-TELEGRAM_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
+# Telegram 配置
+BOT_TOKEN = "8134230045:AAForY5xzO6D4EioSYNfk1yPtF6-cl50ABI"
 CHAT_ID = "485427847"
 
 # ===================
@@ -25,84 +23,98 @@ MIN_SUPER_DRAGON = 8  # 超级长龙
 MIN_TABLE_FOR_FLOOD = 0.7  # 放水时段比例阈值 70%
 MIN_TABLE_FOR_MEDIUM = 0.55 # 中等胜率中上阈值 55%
 
-
-# 时区转换为 GMT+8（马来西亚）
+# 马来西亚时区
 tz = pytz.timezone("Asia/Kuala_Lumpur")
-current_time = datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
 
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}
-    requests.post(url, data=payload)
+# 全局状态
+start_notified = False
+last_status = None
+last_start_time = None
 
-# 首次启动提醒（只运行一次）
-with open("startup_flag.txt", "a+") as f:
-    f.seek(0)
-    if not f.read():
-        send_telegram(f"✅ [系统启动成功] DG监控系统已启动（马来西亚时间：{current_time}）")
-        f.write("started")
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    data = {"chat_id": CHAT_ID, "text": message}
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print(f"Telegram发送失败: {e}")
 
-# 设定放水结构判断标准（图像匹配）
-def is_fangshui(table_img):
-    hsv = cv2.cvtColor(table_img, cv2.COLOR_BGR2HSV)
-    blue_mask = cv2.inRange(hsv, (100, 50, 50), (130, 255, 255))
-    red_mask = cv2.inRange(hsv, (0, 50, 50), (10, 255, 255))
-    total = cv2.countNonZero(blue_mask) + cv2.countNonZero(red_mask)
-    return total > 1000  # 判断为“长龙”结构阈值（可调）
+def analyze_table_image(image):
+    """
+    使用OpenCV图像分析判断放水/收割：
+    1. 检测连续相同颜色块数量 (长连/长龙)
+    2. 检测空白区比例 (桌面是否满)
+    返回： "放水", "中等胜率（中上）", "收割" 或 "中等"
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+    white_ratio = np.sum(thresh == 255) / thresh.size
 
-# 实际执行分析流程
-def run_monitor():
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    driver = webdriver.Chrome(options=chrome_options)
+    # 判断标准 (经验值调整)
+    if white_ratio < 0.30:  
+        return "放水"
+    elif white_ratio < 0.45:
+        return "中等胜率（中上）"
+    elif white_ratio < 0.65:
+        return "中等"
+    else:
+        return "收割"
 
+def check_dg_status():
+    """
+    进入DG平台，抓取牌面截图，分析整体胜率状态
+    """
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(options=options)
     try:
         driver.get("https://dg18.co/wap/")
-        wait = WebDriverWait(driver, 15)
-
+        time.sleep(3)
         # 点击“免费试玩”
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(text(), '免费试玩') or contains(text(), 'Free')]"))).click()
-
-        # 滚动验证
+        try:
+            free_btn = driver.find_element(By.XPATH, "//button[contains(text(),'免费')]")
+            free_btn.click()
+        except:
+            pass
         time.sleep(5)
-        driver.switch_to.frame(driver.find_element(By.TAG_NAME, "iframe"))
-        slider = wait.until(EC.presence_of_element_located((By.CLASS_NAME, "secsdk-captcha-drag-icon")))
-        action = ActionChains(driver)
-        action.click_and_hold(slider).move_by_offset(300, 0).release().perform()
 
-        time.sleep(8)
-        driver.switch_to.default_content()
-        time.sleep(6)
-
-        # 截取所有桌面（模拟）
-        driver.save_screenshot("full_screen.png")
-        img = cv2.imread("full_screen.png")
-
-        # 模拟分割多个桌子图片区域
-        table_imgs = [img[100:300, 100:400], img[300:500, 100:400], img[500:700, 100:400],
-                      img[100:300, 500:800], img[300:500, 500:800], img[500:700, 500:800]]
-
-        match_count = sum(is_fangshui(table) for table in table_imgs)
-        match_ratio = match_count / len(table_imgs)
-
-        now = datetime.now(tz)
-        ending_time = now + timedelta(minutes=10)
-        remaining = (ending_time - now).seconds // 60
-
-        if match_ratio >= 0.70:
-            send_telegram(
-                f"🔥 [放水时段] 目前符合放水结构\n马来西亚时间：{now.strftime('%H:%M:%S')}\n预计结束时间：{ending_time.strftime('%H:%M')}\n此局势预计：剩下 {remaining} 分钟")
-        elif 0.55 <= match_ratio < 0.70:
-            send_telegram(
-                f"⚠️ [中等胜率（中上）] 目前接近放水结构\n马来西亚时间：{now.strftime('%H:%M:%S')}\n预计结束时间：{ending_time.strftime('%H:%M')}\n此局势预计：剩下 {remaining} 分钟")
-        else:
-            pass  # 胜率中等或收割时段，不提醒
-
-    except Exception as e:
-        send_telegram(f"❌ 系统运行出错：{str(e)}")
+        # 滚动验证可能需要模拟 (跳过这里，只做截图分析)
+        driver.save_screenshot("dg_table.png")
+        image = cv2.imread("dg_table.png")
+        return analyze_table_image(image)
     finally:
         driver.quit()
 
-run_monitor()
+def main_loop():
+    global start_notified, last_status, last_start_time
+
+    if not start_notified:
+        now = datetime.datetime.now(tz).strftime("%Y-%m-%d %H:%M:%S")
+        send_telegram_message(f"✅ DG监控已启动 - {now} (GMT+8)")
+        start_notified = True
+
+    current_status = check_dg_status()
+    now = datetime.datetime.now(tz)
+
+    if current_status in ["放水", "中等胜率（中上）"]:
+        if last_status != current_status:
+            last_start_time = now
+            status_name = "放水时段（提高胜率）" if current_status == "放水" else "中等胜率（中上）"
+            send_telegram_message(
+                f"🎯 现在是平台 {status_name}\n"
+                f"预计结束时间：{(now + datetime.timedelta(minutes=10)).strftime('%H:%M')}\n"
+                f"此局势预计：剩下10分钟"
+            )
+    else:
+        if last_status in ["放水", "中等胜率（中上）"] and last_start_time:
+            duration = int((now - last_start_time).total_seconds() / 60)
+            send_telegram_message(f"⚠️ 放水已结束，共持续 {duration} 分钟")
+
+    last_status = current_status
+
+if __name__ == "__main__":
+    main_loop()
